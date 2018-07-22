@@ -4,6 +4,8 @@ from __future__ import unicode_literals
 
 import random
 import re
+import math
+from itertools import product, chain
 
 from transliterate import translit
 
@@ -12,6 +14,12 @@ SHIP = 1
 BLOCKED = 2
 HIT = 3
 MISS = 4
+SKIP = 5
+
+
+LAYOUT_VERTICAL = 1
+LAYOUT_HORIZONTAL = 2
+LAYOUT_UNKNOWN = -1
 
 
 class BaseGame(object):
@@ -42,7 +50,9 @@ class BaseGame(object):
         self.enemy_ships_count = 0
 
         self.last_shot_position = None
+        self.last_shot_damage = None
         self.last_enemy_shot_position = None
+        self.next_shot_index = None
         self.numbers = None
 
     def start_new_game(self, size=10, field=None, ships=None, numbers=None):
@@ -79,6 +89,14 @@ class BaseGame(object):
         for y in range(self.size):
             print '|%s|' % ''.join(mapping[x] for x in self.field[y * self.size: (y + 1) * self.size])
         print '-' * (self.size + 2)
+
+    def print_enemy_field(self):
+        mapping = [' ', '0', 'x', '', '*', 'E']
+
+        print '---'
+        for y in range(self.size):
+            print '|%s|' % ''.join(mapping[x] for x in self.enemy_field[y * self.size: y * self.size + self.size])
+        print '---'
 
     def handle_enemy_shot(self, position):
         index = self.calc_index(position)
@@ -129,6 +147,15 @@ class BaseGame(object):
     def do_shot(self):
         raise NotImplementedError()
 
+    def after_enemy_ship_killed(self):
+        pass
+
+    def after_enemy_ship_damaged(self):
+        pass
+
+    def after_our_miss(self):
+        pass
+
     def repeat(self):
         return self.convert_from_position(self.last_shot_position, numbers=True)
 
@@ -145,10 +172,16 @@ class BaseGame(object):
             self.enemy_field[index] = SHIP
 
             if message == 'kill':
+                self.after_enemy_ship_killed()
                 self.enemy_ships_count -= 1
 
+            if message == 'hit':
+                self.after_enemy_ship_damaged()
         elif message == 'miss':
             self.enemy_field[index] = MISS
+            self.after_our_miss()
+
+        self.print_enemy_field()
 
     def calc_index(self, position):
         x, y = position
@@ -231,10 +264,7 @@ class BaseGame(object):
 
 
 class Game(BaseGame):
-    """Реализация игры с ипользованием обычного random"""
-
     def generate_field(self):
-        """Метод генерации поля"""
         self.field = [0] * self.size ** 2
 
         for length in self.ships:
@@ -282,12 +312,198 @@ class Game(BaseGame):
         while not _try_to_place():
             pass
 
-    def do_shot(self):
-        """Метод выбора координаты выстрела.
+    def debug_print_enemy(self):
+        import sys
+        for ri, r in enumerate(self.enemy_field, start=1):
+            sys.stdout.write(str(r))
+            if ri % self.size == 0:
+                sys.stdout.write('\n')
 
-        ЕГО И НУЖНО ЗАМЕНИТЬ НА СВОЙ АЛГОРИТМ
+        sys.stdout.flush()
+
+    def is_point_invalid(self, p):
+        return p[0] <= 0 or p[1] <= 0 or p[0] > self.size or p[1] > self.size
+
+    def nearest_generator(self, pos):
         """
-        index = random.choice([i for i, v in enumerate(self.enemy_field) if v == EMPTY])
+        Generate cells positions around current.
+        """
+        off_temp = (-1, 0, 1)
+
+        for off_x, off_y in product(off_temp, off_temp):
+            if not off_x and not off_y:
+                continue
+            n_x, n_y = pos[0] + off_x, pos[1] + off_y
+            if self.is_point_invalid((n_x, n_y)):
+                continue
+            yield n_x, n_y
+
+    def disable_for_shot_all_near(self):
+        def check_cell_for_skip(pos):
+            c = self.enemy_field[self.calc_index(pos)]
+            if c == EMPTY:
+                self.enemy_field[self.calc_index(pos)] = SKIP
+                return EMPTY
+            elif c == SHIP:
+                return SHIP
+
+        ship_checked_cells = set()
+        next_checks = set()
+
+        next_checks.add(self.last_shot_position)
+
+        while True:
+            try:
+                ship_cell = next_checks.pop()
+                if ship_cell in ship_checked_cells:
+                    continue
+            except KeyError:
+                break
+
+            ship_checked_cells.add(ship_cell)
+
+            for pos in self.nearest_generator(ship_cell):
+                if check_cell_for_skip(pos) == SHIP:
+                    next_checks.add(pos)
+
+    def generate_lines(self, i, c):
+        def get_pos(ni):
+            if c == 0:
+                return ni, i
+            else:
+                return i, ni
+
+        def get_field(ni):
+            return self.enemy_field[self.calc_index(get_pos(ni))]
+
+        si = 0
+        line_start = None
+
+        while si <= self.size:
+            si += 1
+
+            if si <= self.size and get_field(si) == EMPTY and line_start is None:
+                line_start = si
+            else:
+                if line_start is not None:
+                    line_end = si - 1
+                    if line_start == line_end:
+                        mi = line_start
+                    else:
+                        d = int(math.floor((line_end - line_start) / 2.0))
+                        mi = line_end - d
+                    yield get_pos(mi), line_end - line_start
+
+    def generate_horizontal_lines_points(self):
+        for i in range(1, self.size + 1):
+            for r in self.generate_lines(i, 0):
+                yield r
+
+    def generate_vertical_lines_points(self):
+        for i in range(1, self.size + 1):
+            for r in self.generate_lines(i, 1):
+                yield r
+
+    def get_random_filtered_point(self):
+        all_points = list(chain(self.generate_horizontal_lines_points(),
+                                self.generate_vertical_lines_points()))
+
+        max_length = max(a[1] for a in all_points)
+        p = random.choice(filter(lambda x: x[1] == max_length, all_points))
+        if self.enemy_field[self.calc_index(p[0])] != EMPTY:
+            raise Exception
+
+        return p
+
+    def get_random_field(self):
+        try:
+            p = self.get_random_filtered_point()
+            return self.calc_index(p[0])
+        except:
+            pass
+
+        return random.choice([i for i, v in enumerate(self.enemy_field) if v == EMPTY])
+
+    def do_shot(self):
+        if self.next_shot_index is None:
+            index = self.get_random_field()
+        else:
+            index = self.next_shot_index
 
         self.last_shot_position = self.calc_position(index)
+
+        self.next_shot_index = None  # Reset for next iteration
         return self.convert_from_position(self.last_shot_position)
+
+    def after_enemy_ship_killed(self):
+        """After enemy ship has killed, we need markup skip border around this one."""
+        self.disable_for_shot_all_near()
+        self.last_shot_damage = None
+
+    def after_enemy_ship_damaged(self):
+        self.last_shot_damage = self.last_shot_position
+        self.try_detect_next_ship_cell()
+
+    def after_our_miss(self):
+        if self.last_shot_damage is not None:
+            self.try_detect_next_ship_cell()
+
+    def common_line_finder(self, pos, direction, c):
+        print('cf pos {}, d {}, c {}'.format(pos, direction, c))
+
+        def plus(p):
+            new_p = list(p)
+            new_p[c] += direction
+            return tuple(new_p)
+
+        checked_point = plus(pos)
+
+        while True:
+            if self.is_point_invalid(checked_point):
+                return None
+
+            if self.enemy_field[self.calc_index(checked_point)] == EMPTY:
+                return checked_point
+
+            if self.enemy_field[self.calc_index(checked_point)] in (SKIP, MISS):
+                return None  # Nothing to do here
+
+            checked_point = plus(checked_point)
+
+    def vertical_finder(self, pos):
+        return self.common_line_finder(pos, 1, 1) or self.common_line_finder(pos, -1, 1)
+
+    def horizontal_finder(self, pos):
+        return self.common_line_finder(pos, 1, 0) or self.common_line_finder(pos, -1, 0)
+
+    def get_ship_layout_by_cell(self, cell):
+        for p in self.nearest_generator(cell):
+            if self.enemy_field[self.calc_index(p)] != SHIP:
+                continue
+
+            if p[0] == cell[0]:  # X the same, it's a vertical ship
+                return LAYOUT_VERTICAL
+            elif p[1] == cell[1]:  # Y the same, it's a horizontal ship
+                return LAYOUT_HORIZONTAL
+
+        return LAYOUT_UNKNOWN
+
+    def try_detect_next_ship_cell(self):
+        # If last cell is SHIP, be it is not dead - walk for sides to find other cells
+        ship_layout = self.get_ship_layout_by_cell(self.last_shot_damage)
+        finders = []
+        if ship_layout == LAYOUT_VERTICAL:
+            # Change only Y to find point. Walk up or down until empty
+            finders = [self.vertical_finder]
+        elif ship_layout == LAYOUT_HORIZONTAL:
+            # Change only X to find point. Walk left or right until empty
+            finders = [self.horizontal_finder]
+        elif ship_layout == LAYOUT_UNKNOWN:
+            # We has not know ship type yet, will try all directions
+            finders = [self.vertical_finder, self.horizontal_finder]
+
+        for finder in finders:
+            p = finder(self.last_shot_damage)
+            if p:
+                self.next_shot_index = self.calc_index(p)
+                return

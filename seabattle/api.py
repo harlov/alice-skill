@@ -23,8 +23,14 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 
-@app.route('/', methods=['POST'])
+@app.route('/', methods=['POST', 'GET'])
 def main():
+    if request.method == 'GET':
+        return '<html><body>' \
+               '<img src="https://cs3.pikabu.ru/post_img/2014/02/21/8/1392981302_859186956.jpg" />' \
+               '</body>' \
+               '</html>'
+
     logger.error('Request: %r', request.json)
 
     response = {
