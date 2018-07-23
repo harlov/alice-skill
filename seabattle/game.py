@@ -93,7 +93,7 @@ class BaseGame(object):
         if field is None:
             field = self.field
 
-        mapping = ['.', '1', '.', 'X', 'x']
+        mapping = ['.', '1', '.', 'X', 'x', 'x']
 
         lines = ['']
         lines.append('-' * (self.size + 2))
@@ -430,6 +430,7 @@ class Game(BaseGame):
         self.last_shot_position = self.calc_position(index)
 
         self.next_shot_index = None  # Reset for next iteration
+        print(self.last_shot_position)
         return self.convert_from_position(self.last_shot_position)
 
     def after_enemy_ship_killed(self):
