@@ -4,6 +4,7 @@ from __future__ import unicode_literals
 
 import random
 import re
+import logging
 import math
 from itertools import product, chain
 
@@ -20,6 +21,8 @@ SKIP = 5
 LAYOUT_VERTICAL = 1
 LAYOUT_HORIZONTAL = 2
 LAYOUT_UNKNOWN = -1
+
+log = logging.getLogger(__name__)
 
 
 class BaseGame(object):
@@ -82,26 +85,30 @@ class BaseGame(object):
     def generate_field(self):
         raise NotImplementedError()
 
-    def print_field(self):
-        mapping = ['0', '1', 'x']
+    def print_field(self, field=None):
+        if not self.size:
+            log.info('Empty field')
+            return
 
-        print '-' * (self.size + 2)
+        if field is None:
+            field = self.field
+
+        mapping = ['.', '1', '.', 'X', 'x']
+
+        lines = ['']
+        lines.append('-' * (self.size + 2))
         for y in range(self.size):
-            print '|%s|' % ''.join(mapping[x] for x in self.field[y * self.size: (y + 1) * self.size])
-        print '-' * (self.size + 2)
+            lines.append('|%s|' % ''.join(str(mapping[x]) for x in field[y * self.size: (y + 1) * self.size]))
+        lines.append('-' * (self.size + 2))
+        log.info('\n'.join(lines))
 
     def print_enemy_field(self):
-        mapping = [' ', '0', 'x', '', '*', 'E']
-
-        print '---'
-        for y in range(self.size):
-            print '|%s|' % ''.join(mapping[x] for x in self.enemy_field[y * self.size: y * self.size + self.size])
-        print '---'
+        self.print_field(self.enemy_field)
 
     def handle_enemy_shot(self, position):
         index = self.calc_index(position)
 
-        if self.field[index] in (SHIP, HIT):
+        if self.field[index] == SHIP:
             self.field[index] = HIT
 
             if self.is_dead_ship(index):
@@ -109,6 +116,8 @@ class BaseGame(object):
                 return 'kill'
             else:
                 return 'hit'
+        elif self.field[index] == HIT:
+            return 'kill' if self.is_dead_ship(index) else 'hit'
         else:
             return 'miss'
 
@@ -235,12 +244,9 @@ class BaseGame(object):
 
         x = bits[0].strip()
         try:
-            x = _try_letter(x)
+            x = _try_number(x)
         except ValueError:
-            try:
-                x = _try_number(x)
-            except ValueError:
-                raise ValueError('Can\'t parse X point: %s' % x)
+            raise ValueError('Can\'t parse X point: %s' % x)
 
         y = bits[1].strip()
         try:
@@ -311,15 +317,6 @@ class Game(BaseGame):
 
         while not _try_to_place():
             pass
-
-    def debug_print_enemy(self):
-        import sys
-        for ri, r in enumerate(self.enemy_field, start=1):
-            sys.stdout.write(str(r))
-            if ri % self.size == 0:
-                sys.stdout.write('\n')
-
-        sys.stdout.flush()
 
     def is_point_invalid(self, p):
         return p[0] <= 0 or p[1] <= 0 or p[0] > self.size or p[1] > self.size
