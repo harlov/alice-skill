@@ -195,6 +195,8 @@ class BaseGame(object):
     def calc_index(self, position):
         x, y = position
 
+        print(x, y)
+
         if x > self.size or y > self.size:
             raise ValueError('Wrong position: %s %s' % (x, y))
 
@@ -381,15 +383,23 @@ class Game(BaseGame):
 
             if si <= self.size and get_field(si) == EMPTY and line_start is None:
                 line_start = si
-            else:
-                if line_start is not None:
-                    line_end = si - 1
-                    if line_start == line_end:
-                        mi = line_start
-                    else:
-                        d = int(math.floor((line_end - line_start) / 2.0))
-                        mi = line_end - d
-                    yield get_pos(mi), line_end - line_start
+                continue
+
+            if si > self.size or get_field(si) != EMPTY:
+                if line_start is None:
+                    continue
+
+                line_end = si - 1
+
+                if line_start == line_end:
+                    mi = line_start
+                else:
+                    d = int(math.floor((line_end - line_start) / 2.0))
+                    mi = line_end - d
+
+                yield get_pos(mi), (line_end - line_start + 1)
+
+                line_start = None
 
     def generate_horizontal_lines_points(self):
         for i in range(1, self.size + 1):
